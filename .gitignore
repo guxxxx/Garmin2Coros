@@ -1,0 +1,14 @@
+.venv/
+.auth/
+.state/
+.env
+.env.*
+tmp/
+__pycache__/
+*.py[cod]
+*.fit
+*.tcx
+*.zip
+*.gz
+*.log
+.DS_Store

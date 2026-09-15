@@ -1,0 +1,111 @@
+name: Sync Garmin International to COROS
+
+on:
+  workflow_dispatch:
+    inputs:
+      days:
+        description: "最近几天（含今天）"
+        default: "14"
+        type: string
+      start:
+        description: "可选开始日期 YYYY-MM-DD"
+        type: string
+      end:
+        description: "可选结束日期 YYYY-MM-DD"
+        type: string
+      apply:
+        description: "实际上传到高驰（关闭则仅预览）"
+        default: false
+        type: boolean
+      retry_pending:
+        description: "已人工确认待核实记录未导入，允许重试"
+        default: false
+        type: boolean
+  schedule:
+    # 19:00 UTC = next day 03:00 Asia/Shanghai
+    - cron: "0 19 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: garmin-to-coros
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    if: >-
+      github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+      (github.event_name == 'workflow_dispatch' || vars.AUTO_SYNC_ENABLED == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Verify offline tests
+        run: |
+          python -m pip check
+          python -m unittest discover -s tests -v
+
+      - name: Restore synchronization ledger
+        id: ledger
+        uses: actions/cache/restore@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .state/ledger.json
+          key: garmin-coros-ledger-v1-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: garmin-coros-ledger-v1-
+
+      - name: Stop scheduled uploads if ledger was lost
+        if: github.event_name == 'schedule' && steps.ledger.outputs.cache-matched-key == ''
+        run: |
+          echo '同步状态未恢复。请手动预览并核实高驰记录，再手动执行一次以初始化状态。'
+          exit 1
+
+      - name: Synchronize activities except cycling
+        id: sync
+        env:
+          GARMIN_USERNAME: ${{ secrets.GARMIN_USERNAME }}
+          GARMIN_PASSWORD: ${{ secrets.GARMIN_PASSWORD }}
+          GARMIN_TOKENS: ${{ secrets.GARMIN_TOKENS }}
+          COROS_USERNAME: ${{ secrets.COROS_USERNAME }}
+          COROS_PASSWORD: ${{ secrets.COROS_PASSWORD }}
+          COROS_ACCOUNT_TYPE: ${{ secrets.COROS_ACCOUNT_TYPE }}
+          COROS_REGION: ${{ secrets.COROS_REGION }}
+          INPUT_DAYS: ${{ inputs.days }}
+          INPUT_START: ${{ inputs.start }}
+          INPUT_END: ${{ inputs.end }}
+          INPUT_APPLY: ${{ inputs.apply }}
+          INPUT_RETRY_PENDING: ${{ inputs.retry_pending }}
+        run: |
+          python - <<'PY'
+          import os
+          from garmin2coros.cli import main
+          args = ["--days", os.environ.get("INPUT_DAYS") or "14"]
+          for env, option in [("INPUT_START", "--start"), ("INPUT_END", "--end")]:
+              if os.environ.get(env):
+                  args += [option, os.environ[env]]
+          if os.environ["GITHUB_EVENT_NAME"] == "schedule" or os.environ.get("INPUT_APPLY") == "true":
+              args.append("--apply")
+          if os.environ.get("INPUT_RETRY_PENDING") == "true":
+              args.append("--retry-pending")
+          raise SystemExit(main(args))
+          PY
+
+      - name: Preserve ledger even when synchronization fails
+        if: always() && steps.sync.outcome != 'skipped' && hashFiles('.state/ledger.json') != ''
+        uses: actions/cache/save@caa296126883cff596d87d8935842f9db880ef25 # v5
+        with:
+          path: .state/ledger.json
+          key: garmin-coros-ledger-v1-${{ github.run_id }}-${{ github.run_attempt }}
