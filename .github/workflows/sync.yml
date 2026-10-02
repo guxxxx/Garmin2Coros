@@ -5,7 +5,7 @@ on:
     inputs:
       days:
         description: "最近几天（含今天）"
-        default: "14"
+        default: "7"
         type: string
       start:
         description: "可选开始日期 YYYY-MM-DD"
@@ -73,7 +73,7 @@ jobs:
           echo '同步状态未恢复。请手动预览并核实高驰记录，再手动执行一次以初始化状态。'
           exit 1
 
-      - name: Synchronize activities except cycling
+      - name: Synchronize missing activities of all sports
         id: sync
         env:
           GARMIN_USERNAME: ${{ secrets.GARMIN_USERNAME }}
@@ -92,7 +92,7 @@ jobs:
           python - <<'PY'
           import os
           from garmin2coros.cli import main
-          args = ["--days", os.environ.get("INPUT_DAYS") or "14"]
+          args = ["--days", os.environ.get("INPUT_DAYS") or "7"]
           for env, option in [("INPUT_START", "--start"), ("INPUT_END", "--end")]:
               if os.environ.get(env):
                   args += [option, os.environ[env]]

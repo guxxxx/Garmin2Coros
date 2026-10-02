@@ -16,7 +16,7 @@ import bcrypt
 import requests
 from garminconnect import Garmin
 
-from .domain import ActivityTypes, MAX_BYTES, SyncError, number, utc_seconds
+from .domain import MAX_BYTES, SyncError, number, utc_seconds
 
 
 REGIONS = {
@@ -109,11 +109,10 @@ class GarminSource:
                 (end_day + timedelta(days=2)).isoformat(),
                 sortorder="asc",
             )
-            types = ActivityTypes(self.api.get_activity_types())
         except SyncError:
             raise
         except Exception:
-            raise SyncError("佳明活动列表或类型读取失败") from None
+            raise SyncError("佳明活动列表读取失败") from None
         if not isinstance(rows, list):
             raise SyncError("佳明活动列表格式变化")
         unique = {}
@@ -124,7 +123,7 @@ class GarminSource:
             day = datetime.fromtimestamp(start, tz).date()
             if start_day <= day <= end_day:
                 unique[str(row["activityId"])] = row
-        return sorted(unique.values(), key=lambda r: utc_seconds(r["startTimeGMT"])), types
+        return sorted(unique.values(), key=lambda r: utc_seconds(r["startTimeGMT"]))
 
     def download(self, activity_id):
         try:

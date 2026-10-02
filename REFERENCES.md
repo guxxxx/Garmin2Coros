@@ -10,7 +10,8 @@
    - 新项目独立存放，未修改原项目。
 2. [cyberjunky/python-garminconnect](https://github.com/cyberjunky/python-garminconnect/tree/0.3.15)
    - 安装并固定 `0.3.15`，依赖许可 MIT。
-   - 使用 `Garmin(is_cn=False)`、`get_activities_by_date`、`get_activity_types`、`download_activity(...ORIGINAL)`、当前 JSON 会话接口。
+   - 使用 `Garmin(is_cn=False)`、`get_activities_by_date`、`download_activity(...ORIGINAL)`、当前 JSON 会话接口。
+   - 2026-10-02 更新为最近 7 天所有运动，移除骑行筛选及其依赖的 `get_activity_types` 调用。
    - 包要求 Python ≥3.12，故不沿用旧项目的 Python 3.11 配置。
 3. [lingdu1234/sports-sync-x](https://github.com/lingdu1234/sports-sync-x/tree/69e482bd8e7158209574c67713690a45f895be9d)
    - 阅读 `app/coros/coros_client.py` 和对象存储模块，参考“临时存储凭据 → 上传 → 提交导入”的协议顺序。
@@ -34,7 +35,7 @@
 
 ## 平台限制
 
-- [How to Import Activities to Your COROS Account](https://support.coros.com/hc/en-us/articles/360040256971-How-to-Import-Activities-to-Your-COROS-Account)：支持 FIT/TCX、部分运动模式和导入大小要求。用户要求的“除骑行外都同步”体现为全部非骑行活动尝试；高驰不接受的活动明确保留未完成状态。
+- [How to Import Activities to Your COROS Account](https://support.coros.com/hc/en-us/articles/360040256971-How-to-Import-Activities-to-Your-COROS-Account)：支持 FIT/TCX、部分运动模式和导入大小要求。按当前要求尝试补齐最近 7 天所有运动类型的缺失活动；高驰不接受的活动明确保留未完成状态。
 - [Garth](https://github.com/matin/garth)：作者已声明弃用。本项目使用现行 garminconnect 认证，不直接依赖 Garth。
 
 ## 官方 Actions 版本

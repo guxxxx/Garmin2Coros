@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from io import BytesIO
 import math
 from pathlib import PurePosixPath
-import re
 import xml.etree.ElementTree as ET
 import zipfile
 
@@ -18,10 +17,6 @@ MAX_MEMBERS = 100
 
 class SyncError(Exception):
     """An actionable error whose message contains no credentials or raw responses."""
-
-
-class CyclingExcluded(SyncError):
-    pass
 
 
 def number(value):
@@ -46,47 +41,6 @@ def utc_seconds(value):
         # Garmin startTimeGMT and FIT timestamps are UTC even when offset is absent.
         dt = dt.replace(tzinfo=timezone.utc)
     return dt.timestamp()
-
-
-def cycling_key(value):
-    key = str(value or "").lower().replace("-", "_")
-    return bool(re.search(r"(^|_)(cycling|biking|bike|bicycle|ebike|bmx|cyclocross|velomobile)(_|$)", key))
-
-
-class ActivityTypes:
-    """Use Garmin's parent graph, including future descendants of cycling."""
-
-    def __init__(self, rows):
-        if not isinstance(rows, list) or not rows:
-            raise SyncError("佳明活动类型表无效，无法可靠排除骑行")
-        self.by_id = {}
-        for row in rows:
-            if not isinstance(row, dict) or row.get("typeId") is None:
-                raise SyncError("佳明活动类型表字段变化")
-            self.by_id[str(row["typeId"])] = row
-
-    def is_cycling(self, row):
-        current = row.get("activityType") or {}
-        if not isinstance(current, dict):
-            raise SyncError("活动类型字段无效")
-        visited = set()
-        while current:
-            if cycling_key(current.get("typeKey")):
-                return True
-            type_id = str(current.get("typeId", ""))
-            if type_id in visited:
-                raise SyncError("佳明活动类型继承关系出现循环")
-            visited.add(type_id)
-            known = self.by_id.get(type_id, {})
-            if cycling_key(known.get("typeKey")):
-                return True
-            parent = current.get("parentTypeId", known.get("parentTypeId"))
-            if parent is None or str(parent) in ("0", "-1"):
-                break
-            current = self.by_id.get(str(parent))
-            if current is None:
-                raise SyncError("佳明活动类型父类缺失，需核实后同步")
-        return False
 
 
 @dataclass(frozen=True)
@@ -163,7 +117,7 @@ def tcx_sessions(raw):
     return tuple(sessions)
 
 
-def original_payload(data, *, exclude_cycling=True):
+def original_payload(data):
     if not isinstance(data, bytes) or not data or len(data) > MAX_BYTES:
         raise SyncError("原始文件为空或超过 200 MiB")
     raw = data
@@ -193,8 +147,6 @@ def original_payload(data, *, exclude_cycling=True):
     if extension is None:
         extension = ".fit" if raw[8:12] == b".FIT" else ".tcx"
     sessions = fit_sessions(raw) if extension == ".fit" else tcx_sessions(raw)
-    if exclude_cycling and any(cycling_key(s.sport) for s in sessions):
-        raise CyclingExcluded("原始文件含骑行会话（混合运动整条跳过，保留原文件）")
     buffer = BytesIO()
     # A fixed ZIP timestamp makes repeated uploads of identical originals identical.
     with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_STORED) as archive:

@@ -1,6 +1,6 @@
 """Synthetic fixtures only: no account, network, credentials or personal FIT data."""
 
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from io import BytesIO
 import hashlib
 import base64
@@ -15,9 +15,7 @@ from zoneinfo import ZoneInfo
 
 from fitdecode.utils import compute_crc
 
-from garmin2coros.domain import (
-    ActivityTypes, CyclingExcluded, Session, SyncError, original_payload, same_sessions,
-)
+from garmin2coros.domain import Session, SyncError, original_payload, same_sessions
 from garmin2coros.clients import CorosTarget, GarminSource, request
 from garmin2coros.sync import Ledger, Runner, account_scope, run_lock
 from garmin2coros.cli import main
@@ -26,25 +24,18 @@ from garmin2coros.cli import main
 START = int(datetime(2026, 9, 14, 22, 30, tzinfo=timezone.utc).timestamp())
 DAY = date(2026, 9, 15)
 TZ = ZoneInfo("Asia/Shanghai")
-TYPES = [
-    {"typeId": 1, "typeKey": "running"},
-    {"typeId": 2, "typeKey": "cycling"},
-    {"typeId": 3, "typeKey": "future_ride", "parentTypeId": 2},
-    {"typeId": 4, "typeKey": "walking"},
-    {"typeId": 5, "typeKey": "swimming"},
-    {"typeId": 6, "typeKey": "strength_training"},
-    {"typeId": 7, "typeKey": "hiking"},
-    {"typeId": 8, "typeKey": "other"},
-]
 
 
-def fit(sport=1, start=START, duration=1000, distance=3000):
+def fit(sport=1, start=START, duration=1000, distance=3000, *, sessions=None):
     # FIT session global message 18: start_time, sport, total_timer_time, total_distance.
     definition = bytes([0x40, 0, 0]) + struct.pack("<H", 18) + bytes([
         4, 2, 4, 0x86, 5, 1, 0, 8, 4, 0x86, 9, 4, 0x86,
     ])
-    data = bytes([0]) + struct.pack("<IBII", start - 631065600, sport, duration * 1000, distance * 100)
-    body = definition + data
+    sessions = sessions if sessions is not None else [(sport, start, duration, distance)]
+    body = definition + b"".join(
+        bytes([0]) + struct.pack("<IBII", begin - 631065600, kind, seconds * 1000, meters * 100)
+        for kind, begin, seconds, meters in sessions
+    )
     header = struct.pack("<BBHI4s", 14, 0x20, 2100, len(body), b".FIT")
     header += struct.pack("<H", compute_crc(header))
     output = header + body
@@ -73,7 +64,7 @@ class Source:
         self.downloads = []
 
     def activities(self, *args):
-        return self.rows, ActivityTypes(TYPES)
+        return self.rows
 
     def download(self, activity_id):
         self.downloads.append(activity_id)
@@ -106,28 +97,6 @@ class Target:
 
 
 class DomainTests(unittest.TestCase):
-    def test_parent_cycling_is_excluded(self):
-        self.assertTrue(ActivityTypes(TYPES).is_cycling(row(type_id=3)))
-
-    def test_all_named_cycling_subtypes_excluded(self):
-        types = ActivityTypes(TYPES)
-        for name in ["road_biking", "indoor_cycling", "mountain_biking", "e_bike", "e_bike_mountain", "gravel_cycling", "virtual_ride_cycling", "cyclocross", "bmx"]:
-            with self.subTest(name=name):
-                self.assertTrue(types.is_cycling({"activityType": {"typeKey": name}}))
-
-    def test_non_cycling_types_allowed(self):
-        types = ActivityTypes(TYPES)
-        for type_id in [1, 4, 5, 6, 7, 8]:
-            self.assertFalse(types.is_cycling(row(type_id=type_id)))
-
-    def test_unknown_parent_is_not_silently_allowed(self):
-        with self.assertRaises(SyncError):
-            ActivityTypes(TYPES).is_cycling({"activityType": {"typeId": 900, "parentTypeId": 999}})
-
-    def test_cycle_in_type_graph_fails(self):
-        with self.assertRaises(SyncError):
-            ActivityTypes([{"typeId": 9, "parentTypeId": 9}]).is_cycling(row(type_id=9))
-
     def test_original_fit_preserved(self):
         raw = fit()
         payload = original_payload(zipped(raw))
@@ -136,13 +105,22 @@ class DomainTests(unittest.TestCase):
         self.assertEqual(payload.sessions, (Session(START, "running", 1000.0, 3000.0),))
         self.assertEqual(payload.content, original_payload(raw).content)
 
-    def test_fit_cycling_overrides_garmin_label(self):
-        with self.assertRaises(CyclingExcluded):
-            original_payload(fit(sport=2))
+    def test_cycling_fit_allowed_and_preserved(self):
+        raw = fit(sport=2)
+        payload = original_payload(zipped(raw))
+        self.assertEqual(payload.sessions, (Session(START, "cycling", 1000.0, 3000.0),))
+        with zipfile.ZipFile(BytesIO(payload.content)) as archive:
+            self.assertEqual(archive.read("activity.fit"), raw)
 
-    def test_mixed_sport_file_with_cycling_excluded(self):
-        with self.assertRaises(CyclingExcluded):
-            original_payload(fit() + fit(sport=2, start=START + 1000))
+    def test_mixed_sport_file_with_cycling_allowed_and_preserved(self):
+        raw = fit(sessions=[(1, START, 1000, 3000), (2, START + 1000, 2000, 10000)])
+        payload = original_payload(zipped(raw))
+        self.assertEqual(payload.sessions, (
+            Session(START, "running", 1000.0, 3000.0),
+            Session(START + 1000, "cycling", 2000.0, 10000.0),
+        ))
+        with zipfile.ZipFile(BytesIO(payload.content)) as archive:
+            self.assertEqual(archive.read("activity.fit"), raw)
 
     def test_bad_fit_crc_rejected(self):
         bad = bytearray(fit())
@@ -170,8 +148,11 @@ class DomainTests(unittest.TestCase):
     def test_tcx_original_and_biking(self):
         tcx = b'<TrainingCenterDatabase><Activities><Activity Sport="Running"><Id>2026-09-14T22:30:00Z</Id><Lap><TotalTimeSeconds>1000</TotalTimeSeconds><DistanceMeters>3000</DistanceMeters></Lap></Activity></Activities></TrainingCenterDatabase>'
         self.assertEqual(original_payload(tcx).sessions[0].sport, "running")
-        with self.assertRaises(CyclingExcluded):
-            original_payload(tcx.replace(b"Running", b"Biking"))
+        cycling = tcx.replace(b"Running", b"Biking")
+        payload = original_payload(cycling)
+        self.assertEqual(payload.sessions[0].sport, "cycling")
+        with zipfile.ZipFile(BytesIO(payload.content)) as archive:
+            self.assertEqual(archive.read("activity.tcx"), cycling)
         with self.assertRaises(SyncError):
             original_payload(b'<!DOCTYPE x [<!ENTITY test "bad">]>' + tcx)
 
@@ -249,12 +230,32 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["confirmed"], 1)
         self.assertEqual(target.uploads, 2)
 
-    def test_previously_confirmed_missing_not_recreated(self):
+    def test_previously_confirmed_missing_is_restored(self):
         target = Target()
         self.run_sync(target=target, apply=True)
         target.raw = None
         result = self.run_sync(target=target, apply=True)
-        self.assertEqual(result["pending"], 1)
+        self.assertEqual(result["confirmed"], 1)
+        self.assertEqual(result["pending"], 0)
+        self.assertEqual(target.uploads, 2)
+        self.assertEqual(self.ledger.get("101")["status"], "confirmed")
+
+    def test_previously_confirmed_missing_preview_does_not_restore(self):
+        target = Target()
+        self.run_sync(target=target, apply=True)
+        before = self.path.read_bytes()
+        target.raw = None
+        result = self.run_sync(target=target)
+        self.assertEqual(result["planned"], 1)
+        self.assertEqual(target.uploads, 1)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_previously_confirmed_missing_changed_file_is_not_restored(self):
+        target = Target()
+        self.run_sync(target=target, apply=True)
+        target.raw = None
+        result = self.run_sync(source=Source(raw=fit(duration=1200)), target=target, apply=True)
+        self.assertEqual(result["failed"], 1)
         self.assertEqual(target.uploads, 1)
 
     def test_same_time_conflict_not_uploaded(self):
@@ -276,15 +277,31 @@ class RunnerTests(unittest.TestCase):
         self.assertEqual(result["failed"], 1)
         self.assertEqual(result["confirmed"], 1)
 
-    def test_filter_ride_without_downloading(self):
-        source = Source([row(type_id=3)])
+    def test_cycling_metadata_is_processed(self):
+        source = Source([row(type_id=3)], fit(sport=2))
         result = self.run_sync(source=source, apply=True)
-        self.assertEqual(result["cycling"], 1)
-        self.assertEqual(source.downloads, [])
+        self.assertEqual(result["confirmed"], 1)
+        self.assertEqual(source.downloads, ["101"])
 
-    def test_riding_fit_with_non_riding_metadata_excluded(self):
+    def test_riding_fit_with_non_riding_metadata_is_processed(self):
         result = self.run_sync(source=Source(raw=fit(sport=2)), apply=True)
-        self.assertEqual(result["cycling"], 1)
+        self.assertEqual(result["confirmed"], 1)
+
+    def test_existing_cycling_not_uploaded(self):
+        raw = fit(sport=2)
+        target = Target(raw=raw)
+        result = self.run_sync(source=Source([row(type_id=2)], raw), target=target, apply=True)
+        self.assertEqual(result["existing"], 1)
+        self.assertEqual(target.uploads, 0)
+
+    def test_mixed_sport_with_cycling_imported_once(self):
+        raw = fit(sessions=[(1, START, 1000, 3000), (2, START + 1000, 2000, 10000)])
+        source, target = Source(raw=raw), Target()
+        first = self.run_sync(source=source, target=target, apply=True)
+        second = self.run_sync(source=source, target=target, apply=True)
+        self.assertEqual(first["confirmed"], 1)
+        self.assertEqual(second["existing"], 1)
+        self.assertEqual(target.uploads, 1)
 
     def test_swim_walk_hike_strength_are_processed(self):
         for sport, type_id in [(5, 5), (11, 4), (17, 7), (4, 6)]:
@@ -431,10 +448,26 @@ class ClientTests(unittest.TestCase):
         with patch("garmin2coros.clients.Garmin") as library:
             source = GarminSource("unused")
             self.assertFalse(library.call_args.kwargs["is_cn"])
-            source.api.get_activity_types.return_value = TYPES
             source.api.get_activities_by_date.return_value = [row(), row(), row("102", start=START - 86400)]
-            rows, _ = source.activities(DAY, DAY, TZ)
+            rows = source.activities(DAY, DAY, TZ)
             self.assertEqual([r["activityId"] for r in rows], ["101"])
+            source.api.get_activity_types.assert_not_called()
+
+    def test_garmin_seven_days_respects_beijing_midnight_boundaries(self):
+        start_day = DAY - timedelta(days=6)
+        begin = int(datetime(2026, 9, 9, tzinfo=TZ).timestamp())
+        after_end = int(datetime(2026, 9, 16, tzinfo=TZ).timestamp())
+        with patch("garmin2coros.clients.Garmin"):
+            source = GarminSource("unused")
+            source.api.get_activities_by_date.return_value = [
+                row("104", start=after_end), row("103", start=after_end - 1),
+                row("102", type_id=2, start=begin), row("101", start=begin - 1),
+            ]
+            rows = source.activities(start_day, DAY, TZ)
+            self.assertEqual([activity["activityId"] for activity in rows], ["102", "103"])
+            source.api.get_activities_by_date.assert_called_once_with(
+                "2026-09-07", "2026-09-17", sortorder="asc",
+            )
 
     def test_invalid_cli_dates_and_retry(self):
         for args in [["--days", "0"], ["--start", "2026-09-15", "--end", "2026-09-01"], ["--retry-pending"]]:
@@ -451,6 +484,18 @@ class ClientTests(unittest.TestCase):
             target.return_value.identity = "synthetic-target"
             runner.return_value.run.return_value = {"failed": 0, "pending": 1}
             self.assertEqual(main(["--state-dir", directory]), 2)
+
+    def test_cli_defaults_to_last_seven_beijing_dates_including_today(self):
+        from io import StringIO
+        with tempfile.TemporaryDirectory() as directory, patch("garmin2coros.cli.datetime") as clock, patch("garmin2coros.cli.GarminSource") as source, patch("garmin2coros.cli.CorosTarget") as target, patch("garmin2coros.cli.Runner") as runner, patch("sys.stdout", new=StringIO()):
+            clock.now.return_value = datetime(2026, 10, 2, 0, 30, tzinfo=TZ)
+            source.return_value.identity = "synthetic-source"
+            target.return_value.identity = "synthetic-target"
+            runner.return_value.run.return_value = {"failed": 0, "pending": 0}
+            self.assertEqual(main(["--state-dir", directory]), 0)
+            clock.now.assert_called_once_with(TZ)
+            self.assertEqual(runner.call_args.args[3:6], (date(2026, 9, 26), date(2026, 10, 2), TZ))
+            self.assertFalse(runner.call_args.kwargs["apply"])
 
 
 if __name__ == "__main__":

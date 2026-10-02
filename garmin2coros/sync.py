@@ -10,7 +10,7 @@ from pathlib import Path
 import tempfile
 import time
 
-from .domain import CyclingExcluded, SyncError, original_payload, same_sessions
+from .domain import SyncError, original_payload, same_sessions
 
 
 def private_dir(path):
@@ -108,7 +108,7 @@ class Runner:
         for row in candidates:
             label = str(row["labelId"])
             if label not in self.remote_files:
-                self.remote_files[label] = original_payload(self.target.download(row), exclude_cycling=False)
+                self.remote_files[label] = original_payload(self.target.download(row))
             if same_sessions(payload.sessions, self.remote_files[label].sessions):
                 return True
         if candidates:
@@ -127,17 +127,13 @@ class Runner:
             self.sleep(min(5, remaining))
 
     def run(self):
-        counts = {"cycling": 0, "existing": 0, "planned": 0, "confirmed": 0, "pending": 0, "failed": 0}
-        activities, types = self.source.activities(self.start_day, self.end_day, self.tz)
+        counts = {"existing": 0, "planned": 0, "confirmed": 0, "pending": 0, "failed": 0}
+        activities = self.source.activities(self.start_day, self.end_day, self.tz)
         remote = self.target.activities(self.start_day, self.end_day)
         checked = 0
         for activity in activities:
             activity_id = str(activity["activityId"])
             try:
-                if types.is_cycling(activity):
-                    counts["cycling"] += 1
-                    self.emit(f"{activity_id}：排除骑行")
-                    continue
                 if self.limit is not None and checked >= self.limit:
                     break
                 checked += 1
@@ -153,11 +149,7 @@ class Runner:
                 if record:
                     if record["sha256"] != digest:
                         raise SyncError("同一佳明 ID 的原始文件已变化，需人工核对历史同步状态")
-                    if record["status"] == "confirmed":
-                        counts["pending"] += 1
-                        self.emit(f"{activity_id}：曾确认同步，当前高驰未找到；保留状态，未自动重建")
-                        continue
-                    if not self.retry_pending:
+                    if record["status"] == "pending" and not self.retry_pending:
                         counts["pending"] += 1
                         self.emit(f"{activity_id}：上次提交结果待核实，未再次上传；核实后可用 --retry-pending")
                         continue
@@ -175,9 +167,6 @@ class Runner:
                 else:
                     counts["pending"] += 1
                     self.emit(f"{activity_id}：已提交，高驰尚无匹配记录；可能仍在处理或不支持该活动，请核实")
-            except CyclingExcluded as error:
-                counts["cycling"] += 1
-                self.emit(f"{activity_id}：{error}")
             except SyncError as error:
                 counts["failed"] += 1
                 self.emit(f"{activity_id}：未完成：{error}")
@@ -185,7 +174,7 @@ class Runner:
                 counts["failed"] += 1
                 self.emit(f"{activity_id}：未完成（{type(error).__name__}）；未输出可能含凭据的异常正文")
         self.emit("汇总：" + "，".join(f"{label} {counts[key]}" for key, label in [
-            ("cycling", "排除骑行"), ("existing", "高驰已有"), ("planned", "计划同步"),
+            ("existing", "高驰已有"), ("planned", "计划同步"),
             ("confirmed", "新增并确认"), ("pending", "待核实"), ("failed", "失败"),
         ]))
         return counts
