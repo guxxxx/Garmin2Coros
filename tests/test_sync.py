@@ -393,7 +393,7 @@ class ClientTests(unittest.TestCase):
 
     def test_sts_cookies_include_login_and_resolved_region_only_for_upload_host(self):
         import requests
-        from garmin2coros.clients import REGIONS
+        from garmin2coros.clients import REGIONS, TRAINING_HOSTS
         for region in REGIONS:
             with self.subTest(region=region):
                 target, response = self.upload_fixture(region)
@@ -401,16 +401,19 @@ class ClientTests(unittest.TestCase):
 
                 def check_request(session, method, url, action, **kwargs):
                     self.assertIsNot(session, target.session)
-                    self.assertEqual((method, url), ("GET", "https://t.coros.com/api/proxy/oss/sts"))
+                    host = TRAINING_HOSTS[region]
+                    self.assertEqual((method, url), ("GET", f"https://{host}/api/proxy/oss/sts"))
                     prepared = session.prepare_request(requests.Request(method, url, **kwargs))
                     cookie = prepared.headers.get("Cookie", "")
                     self.assertIn("CPL-coros-token=synthetic-token", cookie)
                     self.assertIn(f"CPL-coros-region={REGIONS[region][0]}", cookie)
                     self.assertEqual(prepared.headers["accessToken"], "synthetic-token")
+                    self.assertEqual(prepared.headers["Origin"], f"https://{host}")
                     self.assertIn("server-login=synthetic-session", cookie)
                     for other in ["https://teamcnapi.coros.com/api/proxy/oss/sts",
                                   "https://example.amazonaws.com/api/proxy/oss/sts",
-                                  "https://t.coros.com/other", "http://t.coros.com/api/proxy/oss/sts"]:
+                                  f"https://{host}/other", f"http://{host}/api/proxy/oss/sts",
+                                  "https://t.coros.com/api/proxy/oss/sts"]:
                         other_cookie = session.prepare_request(requests.Request("GET", other)).headers.get("Cookie", "")
                         self.assertNotIn("CPL-coros-token", other_cookie)
                     self.assertNotIn("CPL-coros-token", target.session.cookies.get_dict())

@@ -26,6 +26,11 @@ REGIONS = {
     "sg": (4, "https://teamsgapi.coros.com", "coros-sg-prod", "aliyun"),
 }
 
+TRAINING_HOSTS = {
+    "cn": "trainingcn.coros.com", "us": "training.coros.com",
+    "eu": "trainingeu.coros.com", "sg": "trainingsg.coros.com",
+}
+
 
 def response_json(response, action):
     if not 200 <= response.status_code < 300:
@@ -253,6 +258,7 @@ class CorosTarget:
     def upload(self, payload, before_submit, tz):
         """Upload object, persist intent, then submit one import request exactly once."""
         region_id, _, bucket, service = REGIONS[self.region]
+        upload_host = TRAINING_HOSTS[self.region]
         token = self.session.headers.get("accessToken")
         if not token:
             raise SyncError("获取高驰临时上传凭据前需要登录高驰")
@@ -262,10 +268,11 @@ class CorosTarget:
             # Preserve server-issued login cookies (including HttpOnly cookies)
             # and login headers, as a browser does for the same-origin proxy.
             upload_session.headers.update(self.session.headers)
+            upload_session.headers.update({"Origin": f"https://{upload_host}", "Referer": f"https://{upload_host}/"})
             upload_session.cookies.update(self.session.cookies)
             for name, value in [("CPL-coros-token", token), ("CPL-coros-region", str(region_id))]:
-                upload_session.cookies.set(name, value, domain="t.coros.com", path="/api/proxy/oss", secure=True)
-            result = response_json(request(upload_session, "GET", "https://t.coros.com/api/proxy/oss/sts", "获取高驰临时上传凭据", params={
+                upload_session.cookies.set(name, value, domain=upload_host, path="/api/proxy/oss", secure=True)
+            result = response_json(request(upload_session, "GET", f"https://{upload_host}/api/proxy/oss/sts", "获取高驰临时上传凭据", params={
                 "bucket": bucket, "service": service, "v": 2,
             }), "获取高驰临时上传凭据")
         try:
