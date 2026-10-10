@@ -2,6 +2,8 @@
 
 ## 2026-10-10：修复上传凭据接口 HTTP 401
 
+**最终真实验证通过**：[Actions 第 33 次运行](https://github.com/guxxxx/Garmin2Coros/actions/runs/38051650608)，代码 `3215140`，处理北京时间 2026-10-04 至 2026-10-10。新增并逐条核对高驰记录 **7 条**，待核实 **0 条**，失败 **0 条**；同步台账缓存保存成功。修复包括携带登录会话及按账号区域使用 Training Hub 主机，通用入口在此前两次验证中仍返回 401。以下保留分步验证过程。
+
 - Actions 第 28、29、30 次运行均在获取高驰临时上传凭据时返回 HTTP 401；依赖、离线测试、台账恢复通过，失败活动尚未上传文件。
 - 官方网页 `main-bPEwKICp.js` 和 `index-DYlaTbLn.js` 显示：上传模块用普通 Axios 发起同源 `/api/proxy/oss/sts` 请求，浏览器携带登录 Cookie；主模块使用 `CPL-coros-token` 和 `CPL-coros-region`。旧实现另建匿名会话，未提供这些 Cookie。
 - 修复为凭据请求单独携带当前高驰登录令牌及登录后解析的区域 Cookie，限定 HTTPS、`t.coros.com` 和 `/api/proxy/oss` 路径；不改变对象存储客户端、导入参数或台账策略。
