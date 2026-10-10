@@ -252,10 +252,16 @@ class CorosTarget:
 
     def upload(self, payload, before_submit, tz):
         """Upload object, persist intent, then submit one import request exactly once."""
-        _, _, bucket, service = REGIONS[self.region]
-        # This is the endpoint used by the current public Training Hub bundle.
-        with requests.Session() as public_session:
-            result = response_json(request(public_session, "GET", "https://t.coros.com/api/proxy/oss/sts", "获取高驰临时上传凭据", params={
+        region_id, _, bucket, service = REGIONS[self.region]
+        token = self.session.headers.get("accessToken")
+        if not token:
+            raise SyncError("获取高驰临时上传凭据前需要登录高驰")
+        # Training Hub's same-origin STS request authenticates with cookies,
+        # unlike the team API's accessToken header. Keep them out of storage/CDN requests.
+        with requests.Session() as upload_session:
+            for name, value in [("CPL-coros-token", token), ("CPL-coros-region", str(region_id))]:
+                upload_session.cookies.set(name, value, domain="t.coros.com", path="/api/proxy/oss", secure=True)
+            result = response_json(request(upload_session, "GET", "https://t.coros.com/api/proxy/oss/sts", "获取高驰临时上传凭据", params={
                 "bucket": bucket, "service": service, "v": 2,
             }), "获取高驰临时上传凭据")
         try:

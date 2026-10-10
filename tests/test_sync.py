@@ -353,9 +353,10 @@ class ClientTests(unittest.TestCase):
         with patch.dict("os.environ", {"COROS_REGION": region}, clear=True):
             target = CorosTarget()
         target.user_id = "1234"
+        target.session.headers["accessToken"] = "synthetic-token"
         target.api = Mock(return_value={"id": "import-test"})
         credentials = {
-            "Region": "oss-cn-beijing" if region == "cn" else "us-west-2",
+            "Region": "oss-cn-beijing" if region == "cn" else "oss-ap-southeast-1" if region == "sg" else "us-west-2",
             "Bucket": REGIONS[region][2], "AccessKeyId": "fake-id",
             "AccessKeySecret": "fake-secret", "SecurityToken": "fake-session",
             "SecretAccessKey": "fake-secret", "SessionToken": "fake-session",
@@ -389,6 +390,52 @@ class ClientTests(unittest.TestCase):
             target.upload(original_payload(fit()), lambda: None, TZ)
         self.assertEqual(storage.call_args.kwargs["aws_session_token"], "fake-session")
         self.assertEqual(storage.return_value.put_object.call_args.kwargs["Bucket"], "coros-s3")
+
+    def test_sts_cookies_include_login_and_resolved_region_only_for_upload_host(self):
+        import requests
+        from garmin2coros.clients import REGIONS
+        for region in REGIONS:
+            with self.subTest(region=region):
+                target, response = self.upload_fixture(region)
+
+                def check_request(session, method, url, action, **kwargs):
+                    self.assertIsNot(session, target.session)
+                    self.assertEqual((method, url), ("GET", "https://t.coros.com/api/proxy/oss/sts"))
+                    prepared = session.prepare_request(requests.Request(method, url, **kwargs))
+                    cookie = prepared.headers.get("Cookie", "")
+                    self.assertIn("CPL-coros-token=synthetic-token", cookie)
+                    self.assertIn(f"CPL-coros-region={REGIONS[region][0]}", cookie)
+                    self.assertNotIn("accessToken", prepared.headers)
+                    for other in ["https://teamcnapi.coros.com/api/proxy/oss/sts",
+                                  "https://example.amazonaws.com/api/proxy/oss/sts",
+                                  "https://t.coros.com/other", "http://t.coros.com/api/proxy/oss/sts"]:
+                        self.assertNotIn("Cookie", session.prepare_request(requests.Request("GET", other)).headers)
+                    return response
+
+                with patch("garmin2coros.clients.request", side_effect=check_request), patch("oss2.Bucket") as bucket, patch("boto3.client"):
+                    bucket.return_value.put_object.return_value = Mock(status=200)
+                    target.upload(original_payload(fit()), lambda: None, TZ)
+
+    def test_sts_unauthorized_does_not_upload_or_record_intent(self):
+        target, _ = self.upload_fixture()
+        intent = Mock()
+        with patch("garmin2coros.clients.request", return_value=Mock(status_code=401)), patch("oss2.Bucket") as bucket:
+            with self.assertRaisesRegex(SyncError, "HTTP 401"):
+                target.upload(original_payload(fit()), intent, TZ)
+        bucket.assert_not_called()
+        intent.assert_not_called()
+        target.api.assert_not_called()
+
+    def test_sts_requires_login_before_request(self):
+        target, _ = self.upload_fixture()
+        del target.session.headers["accessToken"]
+        intent = Mock()
+        with patch("garmin2coros.clients.request") as req:
+            with self.assertRaisesRegex(SyncError, "需要登录高驰"):
+                target.upload(original_payload(fit()), intent, TZ)
+        req.assert_not_called()
+        intent.assert_not_called()
+        target.api.assert_not_called()
 
     def test_object_storage_failure_never_submits_import(self):
         target, response = self.upload_fixture()

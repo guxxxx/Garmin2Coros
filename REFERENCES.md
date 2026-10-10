@@ -35,6 +35,11 @@
 
 ## 平台限制
 
+### 2026-10-10 上传认证核对
+
+- [官方上传模块](https://staticcn.coros.com/coros-traininghub-v2/assets/index-DYlaTbLn.js)：使用普通 Axios 向当前网页同源 `/api/proxy/oss/sts` 请求临时凭据，HTTP 401 时触发登录失效处理。
+- [官方主模块](https://staticcn.coros.com/coros-traininghub-v2/assets/main-bPEwKICp.js)：登录 Cookie 名称为 `CPL-coros-token`、区域 Cookie 为 `CPL-coros-region`。同步工具按此补齐凭据请求的 Cookie，不向对象存储传递账号令牌。资源带构建版本，后续可能变化。
+
 - [How to Import Activities to Your COROS Account](https://support.coros.com/hc/en-us/articles/360040256971-How-to-Import-Activities-to-Your-COROS-Account)：支持 FIT/TCX、部分运动模式和导入大小要求。按当前要求尝试补齐最近 7 天所有运动类型的缺失活动；高驰不接受的活动明确保留未完成状态。
 - [Garth](https://github.com/matin/garth)：作者已声明弃用。本项目使用现行 garminconnect 认证，不直接依赖 Garth。
 
