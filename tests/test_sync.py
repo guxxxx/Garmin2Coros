@@ -397,6 +397,7 @@ class ClientTests(unittest.TestCase):
         for region in REGIONS:
             with self.subTest(region=region):
                 target, response = self.upload_fixture(region)
+                target.session.cookies.set("server-login", "synthetic-session", domain=".coros.com", path="/", secure=True)
 
                 def check_request(session, method, url, action, **kwargs):
                     self.assertIsNot(session, target.session)
@@ -405,11 +406,14 @@ class ClientTests(unittest.TestCase):
                     cookie = prepared.headers.get("Cookie", "")
                     self.assertIn("CPL-coros-token=synthetic-token", cookie)
                     self.assertIn(f"CPL-coros-region={REGIONS[region][0]}", cookie)
-                    self.assertNotIn("accessToken", prepared.headers)
+                    self.assertEqual(prepared.headers["accessToken"], "synthetic-token")
+                    self.assertIn("server-login=synthetic-session", cookie)
                     for other in ["https://teamcnapi.coros.com/api/proxy/oss/sts",
                                   "https://example.amazonaws.com/api/proxy/oss/sts",
                                   "https://t.coros.com/other", "http://t.coros.com/api/proxy/oss/sts"]:
-                        self.assertNotIn("Cookie", session.prepare_request(requests.Request("GET", other)).headers)
+                        other_cookie = session.prepare_request(requests.Request("GET", other)).headers.get("Cookie", "")
+                        self.assertNotIn("CPL-coros-token", other_cookie)
+                    self.assertNotIn("CPL-coros-token", target.session.cookies.get_dict())
                     return response
 
                 with patch("garmin2coros.clients.request", side_effect=check_request), patch("oss2.Bucket") as bucket, patch("boto3.client"):

@@ -259,6 +259,10 @@ class CorosTarget:
         # Training Hub's same-origin STS request authenticates with cookies,
         # unlike the team API's accessToken header. Keep them out of storage/CDN requests.
         with requests.Session() as upload_session:
+            # Preserve server-issued login cookies (including HttpOnly cookies)
+            # and login headers, as a browser does for the same-origin proxy.
+            upload_session.headers.update(self.session.headers)
+            upload_session.cookies.update(self.session.cookies)
             for name, value in [("CPL-coros-token", token), ("CPL-coros-region", str(region_id))]:
                 upload_session.cookies.set(name, value, domain="t.coros.com", path="/api/proxy/oss", secure=True)
             result = response_json(request(upload_session, "GET", "https://t.coros.com/api/proxy/oss/sts", "获取高驰临时上传凭据", params={
